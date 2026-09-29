@@ -290,6 +290,8 @@ export interface AiEditionLlmProviderModelsResult {
 export interface AiEditionMcpStatus {
 	enabled: boolean;
 	port: number;
+	/** Whether clients may run the tools that change the project. Off by default. */
+	allowEdits: boolean;
 	running: boolean;
 	/** `http://127.0.0.1:<port>/mcp` — what a client is pointed at. */
 	url: string;
@@ -655,6 +657,12 @@ export type NativeBridgeRequest =
 			domain: "aiEdition";
 			action: "mcp.setPort";
 			payload: { port: number };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "mcp.setAllowEdits";
+			payload: { allowEdits: boolean };
 			requestId?: string;
 	  }
 	| {
