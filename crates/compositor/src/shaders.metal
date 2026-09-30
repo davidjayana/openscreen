@@ -590,8 +590,6 @@ inline int sculpt_id(constant Layer &layer)
 constant float SCULPT_SCALE = 0.85;
 constant float SCULPT_HOVER = 0.05;
 constant float SCULPT_VOX = 0.0625;
-constant float SCULPT_AR_ROUND = 0.03;
-constant float SCULPT_HAND_ZC = 0.185;
 constant float SCULPT_ZREF_ARROW = 0.2;
 constant float SCULPT_ZREF_HAND = 0.185;
 constant float SCULPT_LAMP_DIST = 1.9;
@@ -611,13 +609,6 @@ inline float s_smin(float a, float b, float k)
 inline float2 s_opu(float2 a, float2 b)
 {
     return a.x < b.x ? a : b;
-}
-
-static float s_capsule(float3 p, float3 a, float3 b, float r)
-{
-    float3 pa = p - a, ba = b - a;
-    float h = saturate(dot(pa, ba) / dot(ba, ba));
-    return length(pa - ba * h) - r;
 }
 
 static float s_round_box(float3 p, float3 b, float r)
@@ -646,34 +637,6 @@ inline float2 s_rot(float2 v, float a)
     return float2(c * v.x - s * v.y, s * v.x + c * v.y);
 }
 
-constant float2 SCULPT_ARROW[7] = {
-    float2(0.0, 0.0), float2(0.0, -0.86), float2(0.215, -0.665), float2(0.37, -1.0),
-    float2(0.53, -0.93), float2(0.38, -0.60), float2(0.64, -0.60)
-};
-
-static float s_arrow2(float2 p)
-{
-    float d = dot(p - SCULPT_ARROW[0], p - SCULPT_ARROW[0]);
-    float s = 1.0;
-    int j = 6;
-    for (int i = 0; i < 7; i++)
-    {
-        float2 e = SCULPT_ARROW[j] - SCULPT_ARROW[i];
-        float2 w = p - SCULPT_ARROW[i];
-        float2 b = w - e * saturate(dot(w, e) / dot(e, e));
-        d = min(d, dot(b, b));
-        bool c0 = p.y >= SCULPT_ARROW[i].y;
-        bool c1 = p.y < SCULPT_ARROW[j].y;
-        bool c2 = e.x * w.y > e.y * w.x;
-        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2))
-        {
-            s = -s;
-        }
-        j = i;
-    }
-    return s * sqrt(d);
-}
-
 static float s_star5(float2 p, float r, float rf)
 {
     const float2 k1 = float2(0.809016994375, -0.587785252292);
@@ -688,220 +651,326 @@ static float s_star5(float2 p, float r, float rf)
     return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
 }
 
-static float s_arrow_solid(float3 p, float h, float re, float dome)
+static float s_vesica(float2 p, float r, float d)
 {
-    float d2 = s_arrow2(p.xy) - SCULPT_AR_ROUND;
-    float hh = h + dome * smoothstep(0.0, 0.07, -d2);
-    return s_extrude(d2, p.z - (SCULPT_HOVER + h + dome), hh, re);
+    p = abs(p);
+    float b = sqrt(r * r - d * d);
+    return (p.y - b) * d > p.x * b ? length(p - float2(0.0, b)) : length(p + float2(d, 0.0)) - r;
 }
 
-static float s_piping(float3 p, float ztop)
-{
-    float d2 = s_arrow2(p.xy) - SCULPT_AR_ROUND;
-    return length(float2(d2 + 0.075, p.z - ztop)) - 0.017;
-}
-
-static float s_glove(float3 p, float zc)
-{
-    float index = s_capsule(p, float3(0.0, -0.10, zc), float3(0.0, -0.52, zc), 0.098);
-    float palm = s_round_box(p - float3(0.185, -0.70, zc), float3(0.255, 0.19, 0.105), 0.1);
-    float f1 = s_capsule(p, float3(0.17, -0.57, zc + 0.012), float3(0.17, -0.41, zc + 0.045), 0.086);
-    float f2 = s_capsule(p, float3(0.31, -0.59, zc + 0.01), float3(0.31, -0.45, zc + 0.04), 0.08);
-    float f3 = s_capsule(p, float3(0.435, -0.625, zc + 0.005), float3(0.435, -0.52, zc + 0.03), 0.07);
-    float thumb = s_capsule(p, float3(0.03, -0.77, zc + 0.03), float3(-0.165, -0.60, zc + 0.065), 0.082);
-    float d = s_smin(palm, min(f1, min(f2, f3)), 0.035);
-    d = s_smin(d, index, 0.05);
-    return s_smin(d, thumb, 0.05);
-}
-
-static float s_cuff(float3 p, float zc)
-{
-    float3 q = p - float3(0.185, -0.925, zc);
-    float2 ab = float2(0.272, 0.12);
-    float e = (length(q.xz / ab) - 1.0) * min(ab.x, ab.y);
-    return s_extrude(e, q.y, 0.07, 0.06);
-}
-
-static float2 s_sprout(float3 p, float3 c)
-{
-    float3 q = p - c;
-    float st2 = s_star5(q.xy, 0.125, 0.52) - 0.022;
-    float2 r = float2(s_extrude(st2, q.z, 0.038, 0.034), 3.0);
-    float3 e = float3(abs(q.x) - 0.032, q.y + 0.005, q.z - 0.036);
-    r = s_opu(r, float2(length(e) - 0.0135, 5.0));
-    float3 l1 = float3(s_rot(q.xy - float2(-0.04, 0.15), -0.6), q.z);
-    float3 l2 = float3(s_rot(q.xy - float2(0.045, 0.155), 0.7), q.z);
-    float leaves = min(s_ellipsoid(l1, float3(0.03, 0.058, 0.02)), s_ellipsoid(l2, float3(0.03, 0.058, 0.02)));
-    return s_opu(r, float2(leaves, 4.0));
-}
-
-// Pixel Candy : une ligne par entier, bit c = colonne c (cf. HLSL et `sculpt.rs`).
-constant int SCULPT_ARROWPIX[16] = { 0, 1, 3, 7, 31, 63, 127, 255, 511, 63, 55, 115, 113, 224, 224, 64 };
-constant int SCULPT_ARROWBACK[18] = {
-    3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 255, 511, 511, 999, 995, 960, 192
-};
-constant int SCULPT_HANDPIX[15] = { 4, 14, 14, 14, 110, 878, 7022, 7022, 8190, 8191, 8191, 8191, 8190, 4092, 4092 };
-constant int SCULPT_HANDBACK[17] = {
-    28, 62, 62, 62, 510, 4094, 32766, 32766, 32766, 32767, 32767, 32767, 32767, 32767, 32766, 16380, 16380
-};
-constant float2 SCULPT_HANDSPAN[17] = {
-    float2(2.0, 4.0), float2(1.0, 5.0), float2(1.0, 5.0), float2(1.0, 5.0), float2(1.0, 8.0),
-    float2(1.0, 11.0), float2(1.0, 14.0), float2(1.0, 14.0), float2(1.0, 14.0), float2(0.0, 14.0),
-    float2(0.0, 14.0), float2(0.0, 14.0), float2(0.0, 14.0), float2(0.0, 14.0), float2(1.0, 14.0),
-    float2(2.0, 13.0), float2(2.0, 13.0)
+// Curseurs cercles (cf. HLSL) : Studio Ink, Pop Coral, Star Sprout.
+constant float2 RIM_POLY[28] = {
+    float2(0.0, -0.06), float2(0.0, -0.7712), float2(0.165, -0.6325), float2(0.313, -0.9318),
+    float2(0.4234, -0.8557), float2(0.2672, -0.5686), float2(0.456, -0.5393),
+    float2(-0.173, -0.5237), float2(-0.016, -0.75), float2(0.329, -0.75), float2(0.411, -0.592),
+    float2(0.411, -0.43), float2(0.19, -0.435), float2(-0.03, -0.44),
+    float2(-0.1825, -0.6215), float2(0.0037, -0.9195), float2(0.3462, -0.9195), float2(0.467, -0.6906),
+    float2(0.467, -0.49), float2(0.2, -0.49), float2(-0.03, -0.49),
+    float2(-0.1807, -0.5534), float2(0.0194, -0.872), float2(0.3485, -0.872), float2(0.47, -0.6795),
+    float2(0.47, -0.49), float2(0.2, -0.49), float2(-0.03, -0.49)
 };
 
-inline float2 s_grid_origin(int shape)
-{
-    return shape == 0 ? float2(0.0, 0.0) : float2(-2.5 * SCULPT_VOX, 0.0);
-}
+constant float4 RIM_GLOVE[27] = {
+    float4(0.0, -0.1077, 0.0, -0.6), float4(0.1493, -0.3279, 0.1493, -0.6),
+    float4(0.2863, -0.3654, 0.2863, -0.6), float4(0.4193, -0.4043, 0.4193, -0.6),
+    float4(-0.2, -0.478, -0.075, -0.625), float4(0.0788, -0.25, 0.0788, -0.3992),
+    float4(0.2188, -0.3, 0.2188, -0.4234), float4(0.3552, -0.33, 0.3552, -0.4534),
+    float4(-0.0845, -0.5386, 0.762, 0.648),
+    float4(0.0, -0.1186, 0.0, -0.65), float4(0.1614, -0.3838, 0.1614, -0.65),
+    float4(0.3177, -0.427, 0.3177, -0.65), float4(0.4645, -0.4848, 0.4645, -0.65),
+    float4(-0.215, -0.535, -0.1208, -0.6864), float4(0.0832, -0.3, 0.0832, -0.48),
+    float4(0.2414, -0.35, 0.2414, -0.482), float4(0.3959, -0.41, 0.3959, -0.533),
+    float4(-0.122, -0.5718, 0.867, 0.498),
+    float4(0.0, -0.122, 0.0, -0.65), float4(0.172, -0.387, 0.172, -0.65),
+    float4(0.3267, -0.427, 0.3267, -0.65), float4(0.4727, -0.4867, 0.4727, -0.65),
+    float4(-0.199, -0.483, -0.102, -0.645), float4(0.0927, -0.3, 0.0927, -0.476),
+    float4(0.2493, -0.35, 0.2493, -0.478), float4(0.402, -0.41, 0.402, -0.52),
+    float4(-0.0993, -0.5267, 0.858, 0.514)
+};
 
-inline bool s_bit(int row, int r, int c, int rows, int cols)
-{
-    return r >= 0 && r < rows && c >= 0 && c < cols && ((row >> clamp(c, 0, 31)) & 1) == 1;
-}
+constant float4 RIM_GLOVE_R[9] = {
+    float4(0.0552, 0.047, 0.045, 0.0375), float4(0.052, 0.0235, 0.0225, 0.0225), float4(0.0552, -0.548, 0.0525, 0.0),
+    float4(0.064, 0.0585, 0.0585, 0.0515), float4(0.06, 0.0197, 0.0178, 0.0172), float4(0.0648, -0.6, 0.058, 0.0),
+    float4(0.066, 0.0553, 0.0553, 0.0507), float4(0.063, 0.024, 0.022, 0.02), float4(0.0647, -0.555, 0.056, 0.0)
+};
 
-static bool s_occ(float2 id, int shape)
+static float s_rim_poly(float2 p, int base)
 {
-    int c = int(id.x);
-    int r = -int(id.y) - 1;
-    if (shape == 0)
+    float d = dot(p - RIM_POLY[base], p - RIM_POLY[base]);
+    float s = 1.0;
+    int j = base + 6;
+    for (int i = base; i < base + 7; i++)
     {
-        return s_bit(SCULPT_ARROWPIX[clamp(r, 0, 15)], r, c, 16, 16);
+        float2 e = RIM_POLY[j] - RIM_POLY[i];
+        float2 w = p - RIM_POLY[i];
+        float2 b = w - e * saturate(dot(w, e) / dot(e, e));
+        d = min(d, dot(b, b));
+        bool c0 = p.y >= RIM_POLY[i].y;
+        bool c1 = p.y < RIM_POLY[j].y;
+        bool c2 = e.x * w.y > e.y * w.x;
+        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2))
+        {
+            s = -s;
+        }
+        j = i;
     }
-    return s_bit(SCULPT_HANDPIX[clamp(r, 0, 14)], r, c, 15, 13);
+    return s * sqrt(d);
 }
 
-static bool s_occ_back(float2 id, int shape)
+static float2 s_rim_glove(float2 p, int g, float palm)
 {
-    int c = int(id.x) + 1;
-    int r = -int(id.y);
-    if (shape == 0)
+    float4 r0 = RIM_GLOVE_R[3 * g];
+    float4 r1 = RIM_GLOVE_R[3 * g + 1];
+    float4 r2 = RIM_GLOVE_R[3 * g + 2];
+    int i = 9 * g;
+    float f = min(sd_segment(p, RIM_GLOVE[i].xy, RIM_GLOVE[i].zw) - r0.x,
+                  sd_segment(p, RIM_GLOVE[i + 1].xy, RIM_GLOVE[i + 1].zw) - r0.y);
+    f = min(f, sd_segment(p, RIM_GLOVE[i + 2].xy, RIM_GLOVE[i + 2].zw) - r0.z);
+    f = min(f, sd_segment(p, RIM_GLOVE[i + 3].xy, RIM_GLOVE[i + 3].zw) - r0.w);
+    f = min(f, sd_segment(p, RIM_GLOVE[i + 4].xy, RIM_GLOVE[i + 4].zw) - r1.x);
+    float grooves = min(sd_segment(p, RIM_GLOVE[i + 5].xy, RIM_GLOVE[i + 5].zw) - r1.y,
+                        sd_segment(p, RIM_GLOVE[i + 6].xy, RIM_GLOVE[i + 6].zw) - r1.z);
+    grooves = min(grooves, sd_segment(p, RIM_GLOVE[i + 7].xy, RIM_GLOVE[i + 7].zw) - r1.w);
+    float sil = s_smin(palm, f, 0.03);
+    float4 v = RIM_GLOVE[i + 8];
+    float wedge = max(max(-dot(p - v.xy, v.zw), p.x + r2.x), r2.y - p.y);
+    return float2(sil, max(sil, -min(grooves, wedge)));
+}
+
+static float2 s_piece(float d, float dc, float sil, float z, float w, float zt, float h, float bump, float mat)
+{
+    float tray = s_extrude(sil - w, z - 0.5 * (SCULPT_HOVER + zt), 0.5 * (zt - SCULPT_HOVER), 0.012);
+    float bead = length(float2(d - 0.5 * w, z - zt)) - 0.5 * w;
+    float u = saturate(-dc / 0.045);
+    float cushion = 0.8 * s_extrude(dc, z - zt, h + 0.022 * u * (2.0 - u) + bump, 0.75 * h);
+    return s_opu(float2(min(tray, bead), 5.0), float2(cushion, mat));
+}
+
+static float2 s_paper(float d, float sil, float z, float w)
+{
+    float navy = s_extrude(sil - w, z - 0.5 * (SCULPT_HOVER + 0.15), 0.5 * (0.15 - SCULPT_HOVER), 0.006);
+    float sheet = s_extrude(d, z - 0.16, 0.01, 0.004);
+    return s_opu(float2(navy, 5.0), float2(sheet, 1.0));
+}
+
+inline float s_bump(float2 p, float2 c, float r)
+{
+    float k = saturate(1.0 - dot(p - c, p - c) / (r * r));
+    return k * k;
+}
+
+static float s_dash(float2 p, float2 a, float2 b, float ra, float rb)
+{
+    p -= a;
+    b -= a;
+    float hb = dot(b, b);
+    float2 q = float2(abs(dot(p, float2(b.y, -b.x))), dot(p, b)) / hb;
+    float2 c = float2(sqrt(hb - (ra - rb) * (ra - rb)), ra - rb);
+    float k = c.x * q.y - c.y * q.x;
+    if (k < 0.0)
     {
-        return s_bit(SCULPT_ARROWBACK[clamp(r, 0, 17)], r, c, 18, 17);
+        return sqrt(hb * dot(q, q)) - ra;
     }
-    return s_bit(SCULPT_HANDBACK[clamp(r, 0, 16)], r, c, 17, 15);
+    if (k > c.x)
+    {
+        return sqrt(hb * (dot(q, q) + 1.0 - 2.0 * q.y)) - rb;
+    }
+    return dot(c, q) - ra;
+}
+
+static float2 s_rimmed(float3 p, int theme, int shape)
+{
+    bool arrow = shape == 0;
+    int g = theme == 4 ? 0 : (theme == 0 ? 1 : 2);
+    float poly = s_rim_poly(p.xy, arrow ? 0 : 7 * g + 7);
+    float2 body = float2(poly, poly);
+    float w = 0.06, zt = 0.17, h = 0.03;
+    float bump = 0.022 * s_bump(p.xy, float2(0.15, -0.45), 0.3);
+    float back = 1e9;
+    if (!arrow)
+    {
+        w = RIM_GLOVE_R[3 * g + 2].z;
+        for (int i = 0; i < 2; i++)
+        {
+            float2 q = p.xy + (i == 1 ? float2(0.03, 0.04) : float2(0.0, 0.0));
+            float2 v = s_rim_glove(q, g, (i == 1 ? s_rim_poly(q, 7 * g + 7) : poly) - 0.05);
+            if (i == 1)
+            {
+                back = v.x - w;
+            }
+            else
+            {
+                body = v;
+                if (theme != 2 || v.x - w <= 0.0)
+                {
+                    break;
+                }
+            }
+        }
+        zt = 0.185;
+        h = 0.028;
+        bump = 0.03 * s_bump(p.xy, float2(0.19, -0.62), 0.28);
+    }
+    float dc = body.y;
+    if (arrow && theme == 0)
+    {
+        body -= 0.015;
+        w = 0.045;
+        dc = 1.0;
+    }
+    float2 r = theme == 2 ? s_paper(body.y, body.x, p.z, w)
+                          : s_piece(body.y, dc, body.x, p.z, w, zt, h, bump, 1.0);
+    if (theme == 0)
+    {
+        if (arrow)
+        {
+            float band = s_extrude(abs(poly + 0.0075) - 0.0225, p.z - zt, 0.028, 0.012);
+            r = s_opu(r, float2(band, 2.0));
+        }
+        return r;
+    }
+    if (theme == 2)
+    {
+        float dash;
+        if (arrow)
+        {
+            float back = s_rim_poly(p.xy + float2(0.025, 0.05), 0) - 0.06;
+            r = s_opu(r, float2(s_extrude(back, p.z - 0.08, 0.03, 0.006), 2.0));
+            dash = min(s_dash(p.xy, float2(-0.1179, -0.1374), float2(-0.1799, -0.0443), 0.028, 0.045),
+                       s_dash(p.xy, float2(-0.1347, -0.2493), float2(-0.248, -0.2056), 0.026, 0.042));
+        }
+        else
+        {
+            r = s_opu(r, float2(s_extrude(back, p.z - 0.08, 0.03, 0.006), 3.0));
+            dash = min(s_dash(p.xy, float2(0.216, -0.1695), float2(0.2593, -0.0685), 0.028, 0.042),
+                       s_dash(p.xy, float2(0.3054, -0.2339), float2(0.3949, -0.1652), 0.0275, 0.041));
+        }
+        return s_opu(r, float2(s_extrude(dash, p.z - 0.11, 0.06, 0.006), 3.0));
+    }
+    if (!arrow)
+    {
+        float2 cq = p.xy - float2(0.1541, -0.9047);
+        float2 bq = abs(float2(cq.x, cq.y - 0.2066 * cq.x * cq.x)) - float2(0.214, 0.0361);
+        float cuff = length(max(bq, 0.0)) + min(max(bq.x, bq.y), 0.0) - 0.03;
+        r = s_opu(r, s_piece(cuff, cuff, cuff, p.z, 0.0477, 0.225, 0.025, 0.0, 2.0));
+    }
+    float2 c = arrow ? float2(0.6118, -0.8079) : float2(0.15, -0.885);
+    float rs = arrow ? 0.1678 : 0.128;
+    float zs = arrow ? 0.23 : 0.285;
+    float2 q = s_rot(p.xy - c, arrow ? 0.2443 : 0.0) / rs;
+    float star = (s_star5(q, 0.82, 0.55) - 0.18) * rs;
+    float leaves = min(s_vesica(s_rot(q - float2(-0.33, 1.38), -0.925), 0.4296, 0.2626),
+                       s_vesica(s_rot(q - float2(0.53, 1.37), 0.873), 0.4296, 0.2626)) * rs;
+    r = s_opu(r, s_piece(leaves, leaves, leaves, p.z, 0.038, zs - 0.02, 0.018, 0.0, 4.0));
+    r = s_opu(r, s_piece(star, star, star, p.z, 0.038, zs, 0.022, 0.018 * s_bump(q, float2(0.0), 1.0), 3.0));
+    float3 e = float3(abs(q.x) - 0.25, q.y - 0.08, (p.z - zs - 0.056) / rs);
+    return s_opu(r, float2(s_ellipsoid(e, float3(0.075, 0.13, 0.1)) * rs, 5.0));
+}
+
+// Pixel Candy : tables générées par scripts/generate-pixel-candy-voxels.mjs (cf. HLSL).
+// <pixel-candy-voxels>
+constant int PIX_BODY[32] = { 1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 127, 247, 243, 480, 192, 48, 120, 120, 120, 504, 4088, 32760, 65534, 65535, 65535, 65534, 32766, 32764, 16380, 16376, 16376 };
+constant int PIX_LINE[32] = { 1, 3, 5, 9, 17, 33, 65, 129, 257, 513, 1985, 73, 149, 147, 288, 192, 48, 72, 72, 72, 456, 3656, 29256, 37454, 32777, 32769, 32770, 16386, 16388, 8196, 8200, 16376 };
+constant int PIX_HI[32] = { 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 18, 34, 32, 64, 0, 0, 16, 16, 16, 16, 16, 16, 16, 22, 18, 4, 4, 8, 8, 16, 0 };
+constant int PIX_SHADE[32] = { 0, 0, 0, 4, 8, 16, 32, 64, 128, 448, 40, 36, 64, 64, 128, 0, 0, 32, 32, 32, 32, 288, 2336, 18720, 16384, 16384, 16384, 8192, 8192, 4096, 8160, 0 };
+constant int PIX_RECT_N[3] = { 0, 17, 29 };
+constant int4 PIX_GRID[2] = {
+    int4(11, 16, 0, 0),
+    int4(16, 16, 16, 0)
+};
+constant float2 PIX_ORIGIN[2] = {
+    float2(0.0, 0.0),
+    float2(-0.3125, 0.0)
+};
+constant float4 PIX_BOX[2] = {
+    float4(0.3438, -0.5, 0.3438, 0.5),
+    float4(0.1875, -0.5, 0.5, 0.5)
+};
+constant float4 PIX_RECT[29] = {
+    float4(0.0313, -0.0313, 0.0313, 0.0313),
+    float4(0.0625, -0.0938, 0.0625, 0.0313),
+    float4(0.0938, -0.1563, 0.0938, 0.0313),
+    float4(0.125, -0.2188, 0.125, 0.0313),
+    float4(0.1563, -0.2813, 0.1563, 0.0313),
+    float4(0.1875, -0.3438, 0.1875, 0.0313),
+    float4(0.2188, -0.4063, 0.2188, 0.0313),
+    float4(0.25, -0.4688, 0.25, 0.0313),
+    float4(0.2813, -0.5313, 0.2813, 0.0313),
+    float4(0.3125, -0.5938, 0.3125, 0.0313),
+    float4(0.3438, -0.6563, 0.3438, 0.0313),
+    float4(0.2188, -0.7188, 0.2188, 0.0313),
+    float4(0.0938, -0.7813, 0.0938, 0.0313),
+    float4(0.375, -0.8125, 0.125, 0.0625),
+    float4(0.0625, -0.8438, 0.0625, 0.0313),
+    float4(0.4375, -0.9063, 0.125, 0.0313),
+    float4(0.4375, -0.9688, 0.0625, 0.0313),
+    float4(0.0, -0.0313, 0.0625, 0.0313),
+    float4(0.0, -0.1563, 0.125, 0.0938),
+    float4(0.0625, -0.2813, 0.1875, 0.0313),
+    float4(0.1563, -0.3438, 0.2813, 0.0313),
+    float4(0.25, -0.4063, 0.375, 0.0313),
+    float4(0.2188, -0.4688, 0.4688, 0.0313),
+    float4(0.1875, -0.5625, 0.5, 0.0625),
+    float4(0.2188, -0.6563, 0.4688, 0.0313),
+    float4(0.1875, -0.7188, 0.4375, 0.0313),
+    float4(0.2188, -0.7813, 0.4063, 0.0313),
+    float4(0.1875, -0.8438, 0.375, 0.0313),
+    float4(0.2188, -0.9375, 0.3438, 0.0625)
+};
+// </pixel-candy-voxels>
+
+inline bool s_pix_bit(int m, int c)
+{
+    return ((m >> clamp(c, 0, 31)) & 1) == 1;
+}
+
+static bool s_pix_body(int shape, int c, int r)
+{
+    int4 g = PIX_GRID[shape];
+    return c >= 0 && c < g.x && r >= 0 && r < g.y && s_pix_bit(PIX_BODY[g.z + clamp(r, 0, g.y - 1)], c);
+}
+
+inline int2 s_pix_cell(float2 p, int shape)
+{
+    float2 o = PIX_ORIGIN[shape];
+    return int2(int(floor((p.x - o.x) / SCULPT_VOX)), int(floor((o.y - p.y) / SCULPT_VOX)));
 }
 
 static float2 s_voxels(float3 p, int shape)
 {
-    float2 o = s_grid_origin(shape);
-    float2 cell = floor((p.xy - o) / SCULPT_VOX);
-    float2 bc = shape == 0 ? float2(0.33, -0.5) : float2(0.25, -0.47);
-    float2 bh = shape == 0 ? float2(0.44, 0.61) : float2(0.48, 0.55);
-    float2 bq = max(abs(p.xy - bc) - bh, 0.0);
+    float4 b = PIX_BOX[shape];
+    float2 bq = max(abs(p.xy - b.xy) - b.zw, 0.0);
     float bz = max(abs(p.z - (SCULPT_HOVER + 0.07)) - 0.07, 0.0);
-    float far = max(SCULPT_VOX, sqrt(dot(bq, bq) + bz * bz));
-    float dF = far;
-    float dB = far;
-    const float3 half_cell = float3(0.5 * SCULPT_VOX, 0.5 * SCULPT_VOX, 0.04);
+    float d = max(SCULPT_VOX, sqrt(dot(bq, bq) + bz * bz));
+    float2 o = PIX_ORIGIN[shape];
+    int2 cell = s_pix_cell(p.xy, shape);
+    const float3 cube = float3(0.5 * SCULPT_VOX, 0.5 * SCULPT_VOX, 0.07);
     for (int j = -1; j <= 1; j++)
     {
         for (int i = -1; i <= 1; i++)
         {
-            float2 id = cell + float2(float(i), float(j));
-            float3 q = float3(p.xy - (o + (id + 0.5) * SCULPT_VOX), p.z);
-            if (s_occ(id, shape))
+            int c = cell.x + i;
+            int r = cell.y + j;
+            if (s_pix_body(shape, c, r))
             {
-                dF = min(dF, s_round_box(q - float3(0.0, 0.0, SCULPT_HOVER + 0.1), half_cell, 0.009));
-            }
-            if (s_occ_back(id, shape))
-            {
-                dB = min(dB, s_round_box(q - float3(0.0, 0.0, SCULPT_HOVER + 0.04), half_cell, 0.009));
+                float3 q = float3(p.x - o.x - (float(c) + 0.5) * SCULPT_VOX, p.y - o.y + (float(r) + 0.5) * SCULPT_VOX,
+                                  p.z - SCULPT_HOVER - 0.07);
+                d = min(d, s_round_box(q, cube, 0.006));
             }
         }
     }
-    return dF < dB ? float2(dF, 6.0) : float2(dB, 7.0);
+    return float2(d, 6.0);
 }
 
-static float s_pixel_hand_dist(float2 p)
+static float s_pixel_outline(float2 p, int shape)
 {
     float d = 1e9;
-    for (int r = 0; r < 17; r++)
+    for (int i = PIX_RECT_N[shape]; i < PIX_RECT_N[shape + 1]; i++)
     {
-        float2 x = (SCULPT_HANDSPAN[r] + float2(-3.5, -2.5)) * SCULPT_VOX;
-        float2 y = float2(-float(r), 1.0 - float(r)) * SCULPT_VOX;
-        float2 q = max(max(float2(x.x, y.x) - p, p - float2(x.y, y.y)), 0.0);
-        d = min(d, length(q));
+        float2 q = abs(p - PIX_RECT[i].xy) - PIX_RECT[i].zw;
+        d = min(d, length(max(q, 0.0)) + min(max(q.x, q.y), 0.0));
     }
     return d;
-}
-
-static float s_gem_edge(float3 p, float2 a, float2 b, float z0)
-{
-    float2 e = b - a;
-    float len = length(e);
-    float2 d = e / len;
-    float2 q = p.xy - a;
-    float dist = dot(q, float2(-d.y, d.x));
-    float along = abs(dot(q, d) - 0.5 * len);
-    float z = p.z - z0;
-    float girdle = (z - 0.035 - 2.2 * dist) * 0.4138;
-    float crown = (z - 0.07 - 0.6 * dist + 0.18 * along) * 0.8438;
-    return max(-dist, max(girdle, crown));
-}
-
-static float s_gem_arrow(float3 p)
-{
-    float z0 = SCULPT_HOVER + 0.03;
-    float slab = max(p.z - z0 - 0.2, z0 - 0.03 - p.z);
-    float head = max(slab, max(s_gem_edge(p, float2(-0.02, 0.03), float2(-0.02, -0.88), z0),
-                           max(s_gem_edge(p, float2(-0.02, -0.88), float2(0.66, -0.61), z0),
-                               s_gem_edge(p, float2(0.66, -0.61), float2(-0.02, 0.03), z0))));
-    float tail = max(slab, max(max(s_gem_edge(p, float2(0.215, -0.665), float2(0.37, -1.0), z0),
-                                   s_gem_edge(p, float2(0.37, -1.0), float2(0.53, -0.93), z0)),
-                               max(s_gem_edge(p, float2(0.53, -0.93), float2(0.38, -0.60), z0),
-                                   s_gem_edge(p, float2(0.38, -0.60), float2(0.215, -0.665), z0))));
-    return min(head, tail);
-}
-
-static float s_facet_capsule(float3 p, float3 a, float3 b, float r, float spin)
-{
-    float3 u = normalize(b - a);
-    float3 v = normalize(cross(u, float3(0.0, 0.0, 1.0)));
-    float3 w = cross(u, v);
-    float3 q = p - b;
-    float h = dot(q, u);
-    float2 rad = float2(dot(q, v), dot(q, w));
-    float d = max(h - r, -dot(p - a, u) - r);
-    for (int k = 0; k < 6; k++)
-    {
-        float an = spin + float(k) * 1.0471976;
-        float s = dot(rad, float2(cos(an), sin(an)));
-        d = max(d, s - r);
-        d = max(d, dot(rad, float2(cos(an + 0.5236), sin(an + 0.5236))) * 0.8660 + h * 0.5 - r);
-        d = max(d, s * 0.5 + h * 0.8660 - r);
-    }
-    return d;
-}
-
-constant float3 SCULPT_FACETS[10] = {
-    float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0),
-    float3(0.7071, 0.7071, 0.0), float3(0.7071, 0.0, 0.7071), float3(0.0, 0.7071, 0.7071),
-    float3(0.5774, 0.5774, 0.5774), float3(0.4472, 0.0, 0.8944), float3(0.0, 0.4472, 0.8944),
-    float3(0.3015, 0.3015, 0.9045)
-};
-
-static float s_facet_ellipsoid(float3 p, float3 r)
-{
-    float3 q = abs(p);
-    float d = -1e9;
-    for (int i = 0; i < 10; i++)
-    {
-        d = max(d, dot(q, SCULPT_FACETS[i]) - length(r * SCULPT_FACETS[i]));
-    }
-    return d;
-}
-
-static float s_crystal_hand(float3 p)
-{
-    float zc = SCULPT_HAND_ZC;
-    float d = s_facet_ellipsoid(p - float3(0.185, -0.70, zc), float3(0.3, 0.235, 0.125));
-    d = min(d, s_facet_capsule(p, float3(0.0, -0.52, zc), float3(0.0, -0.10, zc), 0.098, 0.3));
-    d = min(d, s_facet_capsule(p, float3(0.17, -0.57, zc + 0.012), float3(0.17, -0.41, zc + 0.045), 0.086, 0.1));
-    d = min(d, s_facet_capsule(p, float3(0.31, -0.59, zc + 0.01), float3(0.31, -0.45, zc + 0.04), 0.08, 0.5));
-    d = min(d, s_facet_capsule(p, float3(0.435, -0.625, zc + 0.005), float3(0.435, -0.52, zc + 0.03), 0.07, 0.2));
-    return min(d, s_facet_capsule(p, float3(0.03, -0.77, zc + 0.03), float3(-0.165, -0.60, zc + 0.065), 0.082, 0.7));
 }
 
 static float2 sculpt_proto(float3 p, int theme, int shape)
@@ -910,40 +979,7 @@ static float2 sculpt_proto(float3 p, int theme, int shape)
     {
         return s_voxels(p, shape);
     }
-    if (theme == 1)
-    {
-        return float2(shape == 0 ? s_gem_arrow(p) : s_crystal_hand(p), 8.0);
-    }
-    float2 body;
-    float3 star;
-    if (shape == 0)
-    {
-        float h = 0.075, re = 0.03, dome = 0.0;
-        if (theme == 2)
-        {
-            h = 0.07;
-            re = 0.06;
-            dome = 0.035;
-        }
-        if (theme == 4)
-        {
-            h = 0.07;
-            re = 0.055;
-            dome = 0.025;
-        }
-        body = float2(s_arrow_solid(p, h, re, dome), 1.0);
-        if (theme == 0)
-        {
-            body = s_opu(body, float2(s_piping(p, SCULPT_HOVER + 2.0 * h - 0.004), 2.0));
-        }
-        star = float3(0.57, -0.86, SCULPT_HOVER + 2.0 * h + dome);
-    }
-    else
-    {
-        body = s_opu(float2(s_glove(p, SCULPT_HAND_ZC), 1.0), float2(s_cuff(p, SCULPT_HAND_ZC), 2.0));
-        star = float3(0.185, -0.93, SCULPT_HAND_ZC + 0.15);
-    }
-    return theme == 4 ? s_opu(body, s_sprout(p, star)) : body;
+    return s_rimmed(p, theme, shape);
 }
 
 inline float3 sculpt_point(float3 q, constant Layer &layer)
@@ -965,13 +1001,13 @@ static float2 sculpt_eval(float3 q, bool occ, constant Layer &layer)
     float2 r;
     if (occ && theme == 3)
     {
-        float d2 = shape == 0 ? s_arrow2(p.xy) - 1.2 * SCULPT_VOX : s_pixel_hand_dist(p.xy);
+        float d2 = s_pixel_outline(p.xy, shape);
         float dz = abs(p.z - (SCULPT_HOVER + 0.07)) - 0.07;
         r = float2(length(max(float2(d2, dz), 0.0)) + min(max(d2, dz), 0.0), 7.0);
     }
     else
     {
-        r = sculpt_proto(p, occ && theme == 1 ? 2 : theme, shape);
+        r = sculpt_proto(p, theme, shape);
     }
     return float2(r.x * sculpt_units(layer), r.y);
 }
@@ -1076,16 +1112,13 @@ inline SculptMat s_mat(float3 alb, float rough, float spec, float sss, float ref
 
 static float3 s_pixel_colour(float3 p, int shape)
 {
-    float2 id = floor((p.xy - s_grid_origin(shape)) / SCULPT_VOX);
-    if (!s_occ(id + float2(-1.0, 0.0), shape) || !s_occ(id + float2(0.0, -1.0), shape))
-    {
-        return s_lin(0.52, 0.91, 0.77);
-    }
-    if (!s_occ(id + float2(1.0, 0.0), shape) || !s_occ(id + float2(0.0, 1.0), shape))
-    {
-        return s_lin(1.0, 0.78, 0.87);
-    }
-    return s_lin(1.0, 0.50, 0.71);
+    int2 cell = s_pix_cell(p.xy, shape);
+    int4 g = PIX_GRID[shape];
+    int row = g.z + clamp(cell.y, 0, g.y - 1);
+    if (s_pix_bit(PIX_LINE[row], cell.x)) return s_lin(0.29, 0.12, 0.36);
+    if (s_pix_bit(PIX_HI[row], cell.x)) return s_lin(1.0, 0.78, 0.87);
+    if (s_pix_bit(PIX_SHADE[row], cell.x)) return s_lin(0.87, 0.27, 0.51);
+    return s_lin(1.0, 0.435, 0.66);
 }
 
 static SculptMat sculpt_material(float mat, float3 p, int theme, int shape)
@@ -1093,28 +1126,25 @@ static SculptMat sculpt_material(float mat, float3 p, int theme, int shape)
     bool primary = mat < 1.5;
     if (theme == 0)
     {
-        if (shape == 0 && primary) return s_mat(s_lin(0.10, 0.10, 0.115), 0.3, 0.2, 0.0, 0.9);
-        if (shape == 0) return s_mat(s_lin(0.94, 0.91, 0.84), 0.45, 0.4, 0.2, 0.3);
-        if (primary) return s_mat(s_lin(0.95, 0.92, 0.85), 0.55, 0.35, 0.35, 0.25);
-        return s_mat(s_lin(0.17, 0.18, 0.22), 0.35, 0.6, 0.0, 0.6);
+        if (mat < 2.5) return s_mat(s_lin(0.95, 0.92, 0.85), 0.3, 0.6, 0.35, 0.25);
+        return s_mat(s_lin(0.1, 0.1, 0.11), 0.55, 0.05, 0.0, 0.1);
     }
     if (theme == 2)
     {
-        if (shape == 0) return s_mat(s_lin(1.0, 0.40, 0.30), 0.5, 0.45, 0.4, 0.25);
-        if (primary) return s_mat(s_lin(1.0, 0.79, 0.16), 0.5, 0.45, 0.4, 0.25);
-        return s_mat(s_lin(0.18, 0.20, 0.29), 0.4, 0.5, 0.0, 0.4);
+        if ((primary && shape == 0) || (mat > 2.5 && mat < 3.5 && shape == 1)) return s_mat(s_lin(1.0, 0.40, 0.30), 0.85, 0.08, 0.15, 0.03);
+        if (mat < 3.5) return s_mat(s_lin(1.0, 0.80, 0.10), 0.85, 0.08, 0.15, 0.03);
+        return s_mat(s_lin(0.09, 0.13, 0.45), 0.9, 0.05, 0.05, 0.02);
     }
     if (theme == 4)
     {
-        if (primary && shape == 0) return s_mat(s_lin(0.62, 0.91, 0.78), 0.22, 0.8, 0.25, 0.6);
-        if (primary) return s_mat(s_lin(0.96, 0.94, 0.88), 0.5, 0.35, 0.35, 0.25);
-        if (mat < 2.5) return s_mat(s_lin(0.62, 0.91, 0.78), 0.25, 0.7, 0.25, 0.5);
-        if (mat < 3.5) return s_mat(s_lin(1.0, 0.80, 0.20), 0.3, 0.6, 0.3, 0.4);
-        if (mat < 4.5) return s_mat(s_lin(0.38, 0.80, 0.55), 0.35, 0.5, 0.35, 0.3);
-        return s_mat(s_lin(0.16, 0.12, 0.10), 0.2, 0.8, 0.0, 0.5);
+        if (primary && shape == 0) return s_mat(s_lin(0.68, 0.93, 0.80), 0.25, 0.7, 0.3, 0.3);
+        if (primary) return s_mat(s_lin(0.97, 0.95, 0.90), 0.3, 0.6, 0.35, 0.25);
+        if (mat < 2.5) return s_mat(s_lin(0.52, 0.87, 0.78), 0.25, 0.7, 0.3, 0.3);
+        if (mat < 3.5) return s_mat(s_lin(1.0, 0.75, 0.25), 0.25, 0.7, 0.3, 0.3);
+        if (mat < 4.5) return s_mat(s_lin(0.62, 0.92, 0.72), 0.3, 0.6, 0.3, 0.35);
+        return s_mat(s_lin(0.07, 0.15, 0.33), 0.7, 0.15, 0.05, 0.08);
     }
-    if (mat < 6.5) return s_mat(s_pixel_colour(p, shape), 0.45, 0.35, 0.15, 0.2);
-    return s_mat(s_lin(0.36, 0.18, 0.54), 0.45, 0.35, 0.1, 0.2);
+    return s_mat(s_pixel_colour(p, shape), 0.65, 0.1, 0.12, 0.04);
 }
 
 static float3 model_env(float3 d, float rough, float3 l, float3 fill)
@@ -1124,34 +1154,6 @@ static float3 model_env(float3 d, float rough, float3 l, float3 fill)
     float k = 1.0 - rough * 0.6;
     col += s_lin(1.0, 0.97, 0.92) * 5.0 * k * smoothstep(0.90 - w, 0.97, dot(d, l));
     col += s_lin(0.85, 0.9, 1.0) * 1.6 * k * smoothstep(0.93 - w, 0.98, dot(d, fill));
-    return col;
-}
-
-static float3 s_gem(float k)
-{
-    k = saturate(k) * 3.0;
-    float3 a = s_lin(0.20, 0.95, 1.0);
-    float3 b = s_lin(0.15, 0.42, 1.0);
-    float3 c = s_lin(0.45, 0.25, 0.95);
-    float3 d = s_lin(0.88, 0.50, 1.0);
-    if (k < 1.0) return mix(a, b, k);
-    if (k < 2.0) return mix(b, c, k - 1.0);
-    return mix(c, d, k - 2.0);
-}
-
-static float3 model_shade_crystal(float3 n, float3 rd, float3 L, float fall, float3 l, float3 fill)
-{
-    float cosi = saturate(dot(-rd, n));
-    float F = 0.04 + 0.96 * pow(1.0 - cosi, 5.0);
-    float3 t = refract(rd, n, 1.0 / 1.6);
-    float k = 0.42 + 0.9 * dot(float2(n.x, -n.y), float2(0.7557, -0.6549))
-            + 0.6 * dot(float2(t.x, -t.y), float2(0.6, -0.8));
-    float3 body = float3(s_gem(k - 0.08).r, s_gem(k).g, s_gem(k + 0.08).b);
-    float3 col = body * (0.1 + 1.8 * fall * pow(max(dot(n, L), 0.0), 2.5));
-    col += body * model_env(reflect(t, float3(0.0, 0.0, 1.0)) * float3(1.0, 1.0, -1.0), 0.15, l, fill) * 0.5;
-    col += pow(max(dot(reflect(rd, n), L), 0.0), 30.0) * 2.0;
-    col += model_env(reflect(rd, n), 0.05, l, fill) * F;
-    col += s_lin(0.5, 0.9, 1.0) * pow(1.0 - cosi, 4.0) * 0.6;
     return col;
 }
 
@@ -1178,10 +1180,6 @@ static float3 model_shade(float3 q, float3 n, float3 rd, float3 L, float fall, f
                           texture2d<float, access::sample> texImg)
 {
     int id = sculpt_id(layer);
-    if (id > 0 && (id - 1) / 2 == 1)
-    {
-        return model_tonemap(model_shade_crystal(n, rd, L, fall, l, fill));
-    }
     SculptMat m;
     float gloss = 1.0;
     if (id > 0)
@@ -1217,7 +1215,11 @@ constant int STAGE_NORMAL = 1;
 constant int STAGE_AO = 2;
 constant int STAGE_SELF = 3;
 constant int STAGE_PLANE = 4;
-constant int STAGE_DONE = 5;
+constant int STAGE_EDGE = 5;
+constant int STAGE_SHADE = 6;
+constant int STAGE_DONE = 7;
+
+constant float2 MODEL_SUBPIXEL[3] = { float2(0.35, 0.2), float2(-0.35, 0.2), float2(0.0, -0.4) };
 
 inline float3 model_tetra(int k)
 {
@@ -1253,15 +1255,18 @@ static float4 cursor_model(float2 local, constant Layer &layer,
     float stride = sculpt_id(layer) > 0 ? 0.85 : 1.0;
     float3 lamp = float3(layer.color.rg + sprite_size(layer) * 0.5, 0.0) + l * SCULPT_LAMP_DIST;
 
-    float2 tb = ray_box(ro, rd, lo - 0.02, hi + 0.02);
+    float3 ray = rd;
+    float2 tb = ray_box(ro, ray, lo - 0.02, hi + 0.02);
     int stage = tb.x < tb.y && tb.y > 0.0 ? STAGE_MARCH : STAGE_DONE;
     bool plane_next = stage == STAGE_DONE;
     int k = 0;
     float t = max(tb.x, 0.0);
     float best = 1e9;
     float t_best = t;
+    float d_best = 0.0;
     float mat = 0.0;
     float cov = 0.0;
+    float cov_s = 0.0;
     float3 q = float3(0.0);
     float3 n = float3(0.0);
     float3 L = float3(0.0);
@@ -1273,12 +1278,15 @@ static float4 cursor_model(float2 local, constant Layer &layer,
     float inside = 0.0;
     float contact = 0.0;
     float dropped = 0.0;
-    for (int it = 0; it < 180; it++)
+    int sub = 0;
+    int shaded = 0;
+    float4 acc = float4(0.0);
+    for (int it = 0; it < 500; it++)
     {
         if (plane_next)
         {
             plane_next = false;
-            stage = STAGE_DONE;
+            stage = cov > 0.0 ? STAGE_SHADE : STAGE_DONE;
             float denom = dot(rd, nz);
             if (cov < 1.0 && denom < -1e-4)
             {
@@ -1293,18 +1301,55 @@ static float4 cursor_model(float2 local, constant Layer &layer,
                 }
             }
         }
+        if (stage == STAGE_SHADE)
+        {
+            if (cov_s > 0.0)
+            {
+                float3 tl = lamp - q;
+                float fall = SCULPT_LAMP_DIST * SCULPT_LAMP_DIST / dot(tl, tl);
+                float3 c = model_shade(q, n, ray, normalize(tl), fall, sh, ao, mat, l, fill, layer, texSdf, texImg);
+                acc += float4(c * cov_s, cov_s);
+            }
+            shaded++;
+            stage = STAGE_DONE;
+            if (sub > 0)
+            {
+                float3 dws = float3(local + MODEL_SUBPIXEL[3 - sub] + layer.src.xy, -persp);
+                sub--;
+                dlen = length(dws);
+                ray = plane_to_model(world_to_plane(dws / dlen, f), f);
+                tb = ray_box(ro, ray, lo - 0.02, hi + 0.02);
+                cov_s = 0.0;
+                stage = STAGE_SHADE;
+                if (tb.x < tb.y && tb.y > 0.0)
+                {
+                    stage = STAGE_MARCH;
+                    k = 0;
+                    t = max(tb.x, 0.0);
+                    best = 1e9;
+                    t_best = t;
+                }
+            }
+            continue;
+        }
         float3 pos;
         if (stage == STAGE_MARCH)
         {
-            pos = ro + rd * t;
+            pos = ro + ray * t;
         }
         else if (stage == STAGE_NORMAL)
         {
             pos = q + 0.002 * model_tetra(k);
         }
+        else if (stage == STAGE_EDGE)
+        {
+            float3 side = normalize(cross(n, ray));
+            float3 e = (k >= 2 ? cross(n, side) : side) * (k % 2 == 1 ? -1.0 : 1.0);
+            pos = q + e * 0.5 * t_best / dlen;
+        }
         else if (stage == STAGE_AO)
         {
-            pos = q + (0.01 + 0.0175 * float(k)) * SCULPT_SCALE * n;
+            pos = q + (0.01 + 0.0175 * k) * SCULPT_SCALE * n;
         }
         else if (stage == STAGE_SELF)
         {
@@ -1328,22 +1373,38 @@ static float4 cursor_model(float2 local, constant Layer &layer,
             {
                 best = hit ? 0.0 : d / fp;
                 t_best = t;
+                d_best = d;
                 mat = m.y;
             }
             t += d * stride;
             k++;
             if (hit || t > tb.y || k == 96)
             {
-                cov = saturate(1.0 - best);
-                if (cov > 0.0)
+                cov_s = saturate(1.0 - best);
+                if (shaded > 0)
                 {
-                    q = ro + rd * t_best;
-                    stage = STAGE_NORMAL;
-                    k = 0;
+                    stage = STAGE_SHADE;
+                    if (cov_s > 0.0)
+                    {
+                        q = ro + ray * t_best;
+                        n = float3(0.0);
+                        stage = STAGE_NORMAL;
+                        k = 0;
+                    }
                 }
                 else
                 {
-                    plane_next = true;
+                    cov = cov_s;
+                    if (cov > 0.0)
+                    {
+                        q = ro + ray * t_best;
+                        stage = STAGE_NORMAL;
+                        k = 0;
+                    }
+                    else
+                    {
+                        plane_next = true;
+                    }
                 }
             }
         }
@@ -1354,6 +1415,19 @@ static float4 cursor_model(float2 local, constant Layer &layer,
             if (k == 4)
             {
                 n = normalize(n);
+                k = 0;
+                stage = shaded > 0 ? STAGE_SHADE : STAGE_EDGE;
+            }
+        }
+        else if (stage == STAGE_EDGE)
+        {
+            if (m.y != mat || abs(d - d_best) > 0.02 * t_best / dlen)
+            {
+                sub = 3;
+            }
+            k++;
+            if (k == 4)
+            {
                 stage = STAGE_AO;
                 k = 0;
                 ao = 0.0;
@@ -1361,7 +1435,7 @@ static float4 cursor_model(float2 local, constant Layer &layer,
         }
         else if (stage == STAGE_AO)
         {
-            ao += ((0.01 + 0.0175 * float(k)) * SCULPT_SCALE - d) * pow(0.85, float(k));
+            ao += ((0.01 + 0.0175 * k) * SCULPT_SCALE - d) * pow(0.85, float(k));
             k++;
             if (k == 5)
             {
@@ -1402,7 +1476,7 @@ static float4 cursor_model(float2 local, constant Layer &layer,
             k = 1;
             if (!(tbp.x < tbp.y && tbp.y > 0.0))
             {
-                stage = STAGE_DONE;
+                stage = cov > 0.0 ? STAGE_SHADE : STAGE_DONE;
             }
         }
         else
@@ -1414,21 +1488,15 @@ static float4 cursor_model(float2 local, constant Layer &layer,
             {
                 res = saturate(res);
                 dropped = 1.0 - res * res * (3.0 - 2.0 * res);
-                stage = STAGE_DONE;
+                stage = cov > 0.0 ? STAGE_SHADE : STAGE_DONE;
             }
         }
     }
 
-    float3 rgb = float3(0.0);
-    if (cov > 0.0)
-    {
-        float3 tl = lamp - q;
-        float fall = SCULPT_LAMP_DIST * SCULPT_LAMP_DIST / dot(tl, tl);
-        rgb = model_shade(q, n, rd, normalize(tl), fall, sh, ao, mat, l, fill, layer, texSdf, texImg);
-    }
+    float w = 1.0 / max(shaded, 1);
     float shadow = inside * max(dropped * MODEL_SHADOW_ALPHA, contact * MODEL_CONTACT_ALPHA);
-    float a = cov * layer.color.a;
-    return float4(rgb * a, a + (1.0 - a) * shadow * layer.color.a); // prémultiplié, ombre noire
+    float a = acc.a * w * layer.color.a;
+    return float4(acc.rgb * w * layer.color.a, a + (1.0 - a) * shadow * layer.color.a); // prémultiplié, ombre noire
 }
 
 // ============ Impact du clic (mode 16) ============

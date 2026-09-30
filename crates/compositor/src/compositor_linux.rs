@@ -5697,7 +5697,7 @@ mod tests {
         for state in ["arrow", "pointer"] {
             let still = model_track(state, false, 0.5);
             let sprite = compose_model(&comp, &blue, &extruded, &still);
-            for theme in ["studio-ink", "prism-glow", "pop-coral", "pixel-candy", "star-sprout"] {
+            for theme in ["studio-ink", "pop-coral", "pixel-candy", "star-sprout"] {
                 // Le sprite reste celui du theme par defaut : seul le nom pose le modele.
                 let json = extruded
                     .replace(&format!(r#"/{state}.png","#), &format!(r#"/{state}.png","sculpt":"{theme}/{state}","#));
@@ -5735,6 +5735,69 @@ mod tests {
                 if shadow * 10 < body * 3 {
                     failures.push(format!("{theme}/{state}: pas d'ombre en l'air ({shadow} px)"));
                 }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Les thèmes cerclés gardent le trait de leur dessin (`design/cursors/<thème>`) : sur la
+    /// fleche comme sur la main, le modele est pour une bonne part de la couleur du trait (le
+    /// plateau, le jonc, les rainures entre les doigts), autour de la couleur du corps, et montre
+    /// ce qu'il porte devant : l'etoile jaune de Star Sprout, le calque et les tirets jaunes de la
+    /// fleche de Pop Coral, les tirets corail de sa main. Les parts comptent les pixels francs :
+    /// ceux que l'antialiasing mêle aux bords n'entrent dans aucune.
+    #[test]
+    fn the_rimmed_models_keep_the_outline_of_their_art() {
+        type Rgb = [i32; 3];
+        let navy = |[r, g, b]: Rgb| b > r + 20 && r < 110 && g < 130;
+        let black = |[r, g, b]: Rgb| r.max(g).max(b) < 70;
+        let mint = |[r, g, b]: Rgb| g > 200 && g > r + 15 && b > 150;
+        let ivory = |[r, g, b]: Rgb| r > 200 && g > 190 && b > 160 && r - b < 70;
+        let coral = |[r, g, b]: Rgb| r > 200 && g < 150 && b < 140;
+        let yellow = |[r, g, b]: Rgb| r > 200 && g > 150 && b < 120;
+        // (thème, état, trait, corps, ornement, parts minimales du trait, du corps, de l'ornement)
+        let cases: [(&str, &str, &dyn Fn(Rgb) -> bool, &dyn Fn(Rgb) -> bool, &dyn Fn(Rgb) -> bool, [f32; 3]); 6] = [
+            ("studio-ink", "arrow", &black, &ivory, &|_| false, [0.3, 0.15, 0.0]),
+            ("studio-ink", "pointer", &black, &ivory, &|_| false, [0.2, 0.3, 0.0]),
+            ("pop-coral", "arrow", &navy, &coral, &yellow, [0.2, 0.2, 0.05]),
+            ("pop-coral", "pointer", &navy, &yellow, &coral, [0.18, 0.3, 0.02]),
+            ("star-sprout", "arrow", &navy, &mint, &yellow, [0.25, 0.2, 0.03]),
+            ("star-sprout", "pointer", &navy, &ivory, &yellow, [0.25, 0.2, 0.03]),
+        ];
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let (y, uv) = model_screen_planes(false);
+        let blue = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        let (y, uv) = model_screen_planes(true);
+        let orange = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        let extruded = model_scene_json("null", Some(true), "default", true, 5.0);
+        let hidden = model_scene_json("null", Some(true), "default", false, 5.0);
+        let bare = compose_model(&comp, &blue, &hidden, &model_track("arrow", false, 0.5));
+        let mut failures = Vec::new();
+        for (theme, state, rim, body, extra, [min_rim, min_body, min_extra]) in cases {
+            let still = model_track(state, false, 0.5);
+            let json = extruded
+                .replace(&format!(r#"/{state}.png","#), &format!(r#"/{state}.png","sculpt":"{theme}/{state}","#));
+            let (hover, hover_b) = (compose_model(&comp, &blue, &json, &still), compose_model(&comp, &orange, &json, &still));
+            let mask = model_opaque(&hover, &hover_b, &bare);
+            let (mut total, mut counts) = (0usize, [0usize; 3]);
+            for (i, _) in mask.iter().enumerate().filter(|(_, m)| **m) {
+                let p = [hover[i * 4] as i32, hover[i * 4 + 1] as i32, hover[i * 4 + 2] as i32];
+                total += 1;
+                for (k, class) in [rim, body, extra].iter().enumerate() {
+                    counts[k] += usize::from(class(p));
+                }
+            }
+            let [rim_share, body_share, extra_share] = counts.map(|k| k as f32 / total.max(1) as f32);
+            println!("{theme}/{state} : {total} px, trait {rim_share:.3}, corps {body_share:.3}, ornement {extra_share:.3}");
+            if !(min_rim..0.7).contains(&rim_share) {
+                failures.push(format!("{theme}/{state}: {rim_share:.3} de trait, il a disparu ou tout mange"));
+            }
+            if body_share < min_body {
+                failures.push(format!("{theme}/{state}: {body_share:.3} de couleur du corps"));
+            }
+            if extra_share < min_extra {
+                failures.push(format!("{theme}/{state}: {extra_share:.3} d'ornement"));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
