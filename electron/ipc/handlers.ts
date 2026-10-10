@@ -4601,6 +4601,8 @@ export function registerIpcHandlers(
 			}
 
 			const filePath = result.filePaths[0];
+			// The editor saves back what it opened here: see beforeProjectFileRead.
+			await aiEditionDocuments.beforeProjectFileRead(filePath);
 			const content = await fs.readFile(filePath, "utf-8");
 			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
@@ -4647,6 +4649,7 @@ export function registerIpcHandlers(
 			if (!stats?.isFile()) {
 				return { success: false, message: "File not found" };
 			}
+			await aiEditionDocuments.beforeProjectFileRead(filePath);
 			const content = await fs.readFile(filePath, "utf-8");
 			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
